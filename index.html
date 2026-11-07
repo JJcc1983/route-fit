@@ -374,6 +374,7 @@ const GUARD_THRESHOLD_M = 80;
   const DEFAULT_PRESET = "kei_truck";
   let guardDetourActive = false;
   let guardDetourInProgress = false;
+  let detourMinGuardHeight = null;
 
   const state = {
     origin: { ...QUICK_OD.osakaToJuso.origin },
@@ -787,7 +788,6 @@ const GUARD_THRESHOLD_M = 80;
       : "";
     els.speedBadge.textContent = speedBadgeText(p);
     els.heightValue.textContent = `${parseFloat(els.heightSlider.value).toFixed(2)} m`;
-    if (nav.lastResult) applyGuardDetour();
     if (nav.lastResult && nav.lastResult.geometry) updateGuardFromRoute(nav.lastResult.geometry.coordinates.map(([lng, lat]) => [lat, lng]));
     els.widthValue.textContent = `${parseFloat(els.widthSlider.value).toFixed(2)} m`;
     els.weightValue.textContent = `${parseFloat(els.weightSlider.value).toFixed(1)} t`;
@@ -826,6 +826,7 @@ const GUARD_THRESHOLD_M = 80;
     }
   }
   function updateGuardFromRoute(coords) {
+    if (guardDetourActive) return; // 迂回中はステータスを上書きしない
     if (!coords || coords.length < 2) {
       updateGuardStatus([]);
       return;
@@ -858,6 +859,17 @@ const GUARD_THRESHOLD_M = 80;
     const profile = currentProfile();
     if (!profile) return;
     const effective = profile.height_m + profile.height_margin_m;
+
+    // 迂回中: 車高を下げて安全になった場合のみ元ルートへ復帰
+    if (guardDetourActive) {
+      if (detourMinGuardHeight !== null && effective <= detourMinGuardHeight) {
+        guardDetourActive = false;
+        detourMinGuardHeight = null;
+        await runSearch();
+      }
+      return;
+    }
+
     if (!nav.lastResult || !nav.lastResult.geometry) return;
     const coords = nav.lastResult.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
     const triggered = GUARD_SPOTS.filter((g) => {
@@ -868,15 +880,8 @@ const GUARD_THRESHOLD_M = 80;
       }
       return minDist <= GUARD_THRESHOLD_M && effective > g.max_height_m;
     });
-    // 安全: 迂回中なら元ルートへ復帰
-    if (!triggered.length) {
-      if (guardDetourActive) {
-        guardDetourActive = false;
-        await runSearch();
-      }
-      return;
-    }
-    if (guardDetourActive) return; // すでに迂回中
+    if (!triggered.length) return;
+
     guardDetourInProgress = true;
     try {
       const payload = routePayload();
@@ -915,13 +920,12 @@ const GUARD_THRESHOLD_M = 80;
         navigation_steps: steps,
       };
       guardDetourActive = true;
+      detourMinGuardHeight = Math.min(...triggered.map((g) => g.max_height_m));
       drawResult(data);
       showToast("ガード回避ルートを適用中", true);
       els.statusChip.textContent = "ガード回避ルート適用中";
       els.statusChip.className = "rounded-full px-2 py-0.5 text-xs font-bold bg-amber-100 text-amber-700";
-      updateGuardStatus([]);
-      const gtext = `迂回適用（最低制限高 ${Math.min(...triggered.map((g) => g.max_height_m)).toFixed(1)} m 回避）`;
-      els.guardStatus.textContent = gtext;
+      els.guardStatus.textContent = `迂回適用（最低制限高 ${detourMinGuardHeight.toFixed(1)} m 回避）`;
       els.guardStatus.className = "mt-1 text-xs text-amber-400";
     } catch (e) {
       showToast("迂回ルート取得に失敗: " + e.message, false);
@@ -1870,7 +1874,7 @@ const GUARD_THRESHOLD_M = 80;
     }
   }
 
-  els.preset.addEventListener("change", applyPresetToSliders);
+  els.preset.addEventListener("change", () => { applyPresetToSliders(); scheduleSearch(); });
   els.button.addEventListener("click", runSearch);
   els.originSearch.addEventListener("click", () => confirmGeocode("origin"));
   els.destinationSearch.addEventListener("click", () => confirmGeocode("destination"));
@@ -1895,7 +1899,16 @@ const GUARD_THRESHOLD_M = 80;
   }));
   [els.heightSlider, els.widthSlider, els.weightSlider].forEach((slider) => {
     slider.addEventListener("input", updateSizeLabels);
-    slider.addEventListener("change", scheduleSearch);
+    slider.addEventListener("change", () => {
+      updateSizeLabels();
+      if (slider === els.heightSlider) {
+        if (nav.lastResult && nav.lastResult.geometry) {
+          updateGuardFromRoute(nav.lastResult.geometry.coordinates.map(([lng, lat]) => [lat, lng]));
+        }
+        applyGuardDetour();
+      }
+      scheduleSearch();
+    });
   });
 
   els.quickOsakaJuso.addEventListener("click", () => applyQuick(QUICK_OD.osakaToJuso));
