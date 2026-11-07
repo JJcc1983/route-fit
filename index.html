@@ -366,6 +366,8 @@
     },
   };
 
+const DEFAULT_PRESETS = {"moped_50": {"type": "moped_50", "name": "🛵 原付一種 (50cc)", "height_m": 1.1, "width_m": 0.7, "length_m": 1.8, "weight_t": 0.1, "engine_cc": 50, "max_speed_city_kmh": 30.0, "max_speed_highway_kmh": 30.0, "allow_motorway": false, "allow_trunk_bypass": false, "require_hook_turn": true, "height_margin_m": 0.2, "avoid_underpass": true}, "scooter_125": {"type": "scooter_125", "name": "🏍️ 原付二種 (125cc)", "height_m": 1.1, "width_m": 0.75, "length_m": 1.9, "weight_t": 0.15, "engine_cc": 125, "max_speed_city_kmh": 60.0, "max_speed_highway_kmh": 60.0, "allow_motorway": false, "allow_trunk_bypass": true, "require_hook_turn": false, "height_margin_m": 0.2, "avoid_underpass": false}, "motorcycle": {"type": "motorcycle", "name": "🏍️ 中・大型二輪", "height_m": 1.2, "width_m": 0.85, "length_m": 2.1, "weight_t": 0.25, "engine_cc": 400, "max_speed_city_kmh": 60.0, "max_speed_highway_kmh": 100.0, "allow_motorway": true, "allow_trunk_bypass": true, "require_hook_turn": false, "height_margin_m": 0.2, "avoid_underpass": false}, "kei_truck": {"type": "kei_truck", "name": "🚙 軽トラ・軽バン", "height_m": 1.95, "width_m": 1.47, "length_m": 3.39, "weight_t": 1.5, "engine_cc": null, "max_speed_city_kmh": 60.0, "max_speed_highway_kmh": 100.0, "allow_motorway": true, "allow_trunk_bypass": true, "require_hook_turn": false, "height_margin_m": 0.2, "avoid_underpass": false}, "truck_2t": {"type": "truck_2t", "name": "🚚 2tアルミバン", "height_m": 3.0, "width_m": 1.89, "length_m": 4.69, "weight_t": 4.5, "engine_cc": null, "max_speed_city_kmh": 60.0, "max_speed_highway_kmh": 100.0, "allow_motorway": true, "allow_trunk_bypass": true, "require_hook_turn": false, "height_margin_m": 0.2, "avoid_underpass": false}, "truck_4t": {"type": "truck_4t", "name": "🚚 4tウィング", "height_m": 3.5, "width_m": 2.35, "length_m": 8.45, "weight_t": 7.9, "engine_cc": null, "max_speed_city_kmh": 60.0, "max_speed_highway_kmh": 80.0, "allow_motorway": true, "allow_trunk_bypass": true, "require_hook_turn": false, "height_margin_m": 0.2, "avoid_underpass": false}};
+
   const DEFAULT_PRESET = "kei_truck";
 
   const state = {
@@ -863,12 +865,23 @@
   }
 
   async function fetchGeocode(query) {
-    const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
-    if (!res.ok) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error(detail.detail || `geocode API ${res.status}`);
+    try {
+      const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
+      if (res.ok) return res.json();
+    } catch (e) { /* fall through to direct */ }
+    // GitHub Pages / 静的環境向けフォールバック: GSI を直接呼ぶ
+    try {
+      const res = await fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(query)}`);
+      if (!res.ok) throw new Error(`GSI ${res.status}`);
+      const data = await res.json();
+      return (data || []).map((it) => ({
+        display_name: (it.properties && it.properties.title) || query,
+        lat: it.geometry.coordinates[1],
+        lng: it.geometry.coordinates[0],
+      }));
+    } catch (e) {
+      throw new Error("geocode failed: " + e.message);
     }
-    return res.json();
   }
 
   function chooseGeocodeResult(key, item) {
@@ -1568,16 +1581,22 @@
     els.optimizeButton.disabled = true;
     els.optimizeButton.textContent = "最適化中...";
     try {
-      const res = await fetch("/api/route/optimize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail || `optimize API ${res.status}`);
+      let result = null;
+      try {
+        const res = await fetch("/api/route/optimize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) result = await res.json();
+      } catch (e) { /* fall through */ }
+      if (!result) {
+        await runSearch();
+        searchInFlight = false;
+        els.optimizeButton.textContent = originalLabel;
+        syncOptimizeButton();
+        return;
       }
-      const result = await res.json();
       const ordered = result.ordered_waypoints || [];
       if (ordered.length === state.waypoints.length) {
         state.waypoints = ordered.map((p) => ({
@@ -1620,17 +1639,51 @@
 
     const requestId = ++searchSeq;
     try {
-      const res = await fetch("/api/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail || `route API ${res.status}`);
+      let data = null;
+      try {
+        const res = await fetch("/api/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) data = await res.json();
+      } catch (e) { /* fall through to direct OSRM */ }
+      if (!data) {
+        const pts = [payload.origin, ...(payload.waypoints || []), payload.destination];
+        const coordStr = pts.map((p) => `${p.lng},${p.lat}`).join(";");
+        const osrmRes = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&steps=true`);
+        if (!osrmRes.ok) throw new Error(`OSRM ${osrmRes.status}`);
+        const osrm = await osrmRes.json();
+        const route = (osrm.routes || [])[0];
+        if (!route) throw new Error("OSRM route not found");
+        const steps = [];
+        (route.legs || []).forEach((leg, li) => {
+          (leg.steps || []).forEach((st) => {
+            const loc = (st.maneuver && st.maneuver.location) || [];
+            steps.push({
+              leg_index: li,
+              type: st.maneuver ? st.maneuver.type : "",
+              modifier: st.maneuver ? (st.maneuver.modifier || "") : "",
+              name: st.name || "",
+              distance: st.distance || 0,
+              duration: st.duration || 0,
+              lat: loc.length >= 2 ? loc[1] : 0,
+              lng: loc.length >= 2 ? loc[0] : 0,
+            });
+          });
+        });
+        data = {
+          geometry: route.geometry,
+          distance_km: (route.distance || 0) / 1000,
+          duration_min: (route.duration || 0) / 60,
+          alerts: [],
+          profile_applied: payload.vehicle_profile,
+          ordered_waypoints: payload.waypoints || [],
+          navigation_steps: steps,
+        };
       }
       if (requestId === searchSeq) {
-        drawResult(await res.json());
+        drawResult(data);
       }
     } catch (e) {
       if (requestId === searchSeq) {
@@ -1657,14 +1710,14 @@
       const res = await fetch("/api/presets");
       if (!res.ok) throw new Error(`presets API ${res.status}`);
       presets = await res.json();
-      els.preset.innerHTML = Object.entries(presets)
-        .map(([key, p]) => `<option value="${key}">${p.name}</option>`)
-        .join("");
-      els.preset.value = presets[DEFAULT_PRESET] ? DEFAULT_PRESET : Object.keys(presets)[0];
-      applyPresetToSliders();
     } catch (e) {
-      showError(`プリセット取得に失敗しました: ${e.message}`);
+      presets = DEFAULT_PRESETS;
     }
+    els.preset.innerHTML = Object.entries(presets)
+      .map(([key, p]) => `<option value="${key}">${p.name}</option>`)
+      .join("");
+    els.preset.value = presets[DEFAULT_PRESET] ? DEFAULT_PRESET : Object.keys(presets)[0];
+    applyPresetToSliders();
   }
 
   function applyQuick(od) {
