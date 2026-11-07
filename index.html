@@ -368,10 +368,12 @@
 
 const DEFAULT_PRESETS = {"moped_50": {"type": "moped_50", "name": "🛵 原付一種 (50cc)", "height_m": 1.1, "width_m": 0.7, "length_m": 1.8, "weight_t": 0.1, "engine_cc": 50, "max_speed_city_kmh": 30.0, "max_speed_highway_kmh": 30.0, "allow_motorway": false, "allow_trunk_bypass": false, "require_hook_turn": true, "height_margin_m": 0.2, "avoid_underpass": true}, "scooter_125": {"type": "scooter_125", "name": "🏍️ 原付二種 (125cc)", "height_m": 1.1, "width_m": 0.75, "length_m": 1.9, "weight_t": 0.15, "engine_cc": 125, "max_speed_city_kmh": 60.0, "max_speed_highway_kmh": 60.0, "allow_motorway": false, "allow_trunk_bypass": true, "require_hook_turn": false, "height_margin_m": 0.2, "avoid_underpass": false}, "motorcycle": {"type": "motorcycle", "name": "🏍️ 中・大型二輪", "height_m": 1.2, "width_m": 0.85, "length_m": 2.1, "weight_t": 0.25, "engine_cc": 400, "max_speed_city_kmh": 60.0, "max_speed_highway_kmh": 100.0, "allow_motorway": true, "allow_trunk_bypass": true, "require_hook_turn": false, "height_margin_m": 0.2, "avoid_underpass": false}, "kei_truck": {"type": "kei_truck", "name": "🚙 軽トラ・軽バン", "height_m": 1.95, "width_m": 1.47, "length_m": 3.39, "weight_t": 1.5, "engine_cc": null, "max_speed_city_kmh": 60.0, "max_speed_highway_kmh": 100.0, "allow_motorway": true, "allow_trunk_bypass": true, "require_hook_turn": false, "height_margin_m": 0.2, "avoid_underpass": false}, "truck_2t": {"type": "truck_2t", "name": "🚚 2tアルミバン", "height_m": 3.0, "width_m": 1.89, "length_m": 4.69, "weight_t": 4.5, "engine_cc": null, "max_speed_city_kmh": 60.0, "max_speed_highway_kmh": 100.0, "allow_motorway": true, "allow_trunk_bypass": true, "require_hook_turn": false, "height_margin_m": 0.2, "avoid_underpass": false}, "truck_4t": {"type": "truck_4t", "name": "🚚 4tウィング", "height_m": 3.5, "width_m": 2.35, "length_m": 8.45, "weight_t": 7.9, "engine_cc": null, "max_speed_city_kmh": 60.0, "max_speed_highway_kmh": 80.0, "allow_motorway": true, "allow_trunk_bypass": true, "require_hook_turn": false, "height_margin_m": 0.2, "avoid_underpass": false}};
 
-const GUARD_SPOTS = [{"id": "nakatsu-guard", "name": "中津近郊 高架下ガード", "lat": 34.70526, "lng": 135.49712, "max_height_m": 2.8}, {"id": "nishi-yokobori-central", "name": "西横堀筋 中央大通高架下", "lat": 34.6818, "lng": 135.4985, "max_height_m": 2.0}, {"id": "deiribashi-kita", "name": "出入橋北側 高架下連絡路", "lat": 34.697, "lng": 135.49, "max_height_m": 2.1}];
+const GUARD_SPOTS = [{"id": "nakatsu-guard", "name": "中津高架下ガード", "lat": 34.70526, "lng": 135.49712, "max_height_m": 2.8, "max_weight_t": null, "detour": {"lat": 34.707, "lng": 135.4995, "name": "東側バイパス・迂回経路へ迂回"}}, {"id": "nishi-yokobori-central", "name": "西横堀川 中央大通り高架下", "lat": 34.6818, "lng": 135.4985, "max_height_m": 2.0, "max_weight_t": 2.0, "detour": {"lat": 34.6818, "lng": 135.496, "name": "堀川沿い迂回路へ迂回"}}, {"id": "deiribashi-kita", "name": "出入口付近 高架下連続高架", "lat": 34.697, "lng": 135.49, "max_height_m": 2.1, "max_weight_t": 2.0, "detour": {"lat": 34.696, "lng": 135.488, "name": "なんば周辺迂回路へ迂回"}}];
 const GUARD_THRESHOLD_M = 80;
 
   const DEFAULT_PRESET = "kei_truck";
+  let guardDetourActive = false;
+  let guardDetourInProgress = false;
 
   const state = {
     origin: { ...QUICK_OD.osakaToJuso.origin },
@@ -785,6 +787,7 @@ const GUARD_THRESHOLD_M = 80;
       : "";
     els.speedBadge.textContent = speedBadgeText(p);
     els.heightValue.textContent = `${parseFloat(els.heightSlider.value).toFixed(2)} m`;
+    if (nav.lastResult) applyGuardDetour();
     if (nav.lastResult && nav.lastResult.geometry) updateGuardFromRoute(nav.lastResult.geometry.coordinates.map(([lng, lat]) => [lat, lng]));
     els.widthValue.textContent = `${parseFloat(els.widthSlider.value).toFixed(2)} m`;
     els.weightValue.textContent = `${parseFloat(els.weightSlider.value).toFixed(1)} t`;
@@ -848,6 +851,83 @@ const GUARD_THRESHOLD_M = 80;
     els.guardStatus.className = blocked
       ? "mt-1 text-xs text-red-400 font-bold"
       : "mt-1 text-xs text-emerald-400";
+  }
+
+  async function applyGuardDetour() {
+    if (guardDetourInProgress) return;
+    const profile = currentProfile();
+    if (!profile) return;
+    const effective = profile.height_m + profile.height_margin_m;
+    if (!nav.lastResult || !nav.lastResult.geometry) return;
+    const coords = nav.lastResult.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+    const triggered = GUARD_SPOTS.filter((g) => {
+      let minDist = Infinity;
+      for (const c of coords) {
+        const d = haversineMeters(g.lat, g.lng, c[0], c[1]);
+        if (d < minDist) minDist = d;
+      }
+      return minDist <= GUARD_THRESHOLD_M && effective > g.max_height_m;
+    });
+    // 安全: 迂回中なら元ルートへ復帰
+    if (!triggered.length) {
+      if (guardDetourActive) {
+        guardDetourActive = false;
+        await runSearch();
+      }
+      return;
+    }
+    if (guardDetourActive) return; // すでに迂回中
+    guardDetourInProgress = true;
+    try {
+      const payload = routePayload();
+      const detourWps = triggered.map((g) => ({ lat: g.detour.lat, lng: g.detour.lng, name: g.detour.name }));
+      payload.waypoints = [...(payload.waypoints || []), ...detourWps];
+      const pts = [payload.origin, ...payload.waypoints, payload.destination];
+      const coordStr = pts.map((p) => `${p.lng},${p.lat}`).join(";");
+      const osrmRes = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&steps=true`);
+      if (!osrmRes.ok) throw new Error(`OSRM ${osrmRes.status}`);
+      const osrm = await osrmRes.json();
+      const route = (osrm.routes || [])[0];
+      if (!route) throw new Error("no detour route");
+      const steps = [];
+      (route.legs || []).forEach((leg, li) => {
+        (leg.steps || []).forEach((st) => {
+          const loc = (st.maneuver && st.maneuver.location) || [];
+          steps.push({
+            leg_index: li,
+            type: st.maneuver ? st.maneuver.type : "",
+            modifier: st.maneuver ? (st.maneuver.modifier || "") : "",
+            name: st.name || "",
+            distance: st.distance || 0,
+            duration: st.duration || 0,
+            lat: loc.length >= 2 ? loc[1] : 0,
+            lng: loc.length >= 2 ? loc[0] : 0,
+          });
+        });
+      });
+      const data = {
+        geometry: route.geometry,
+        distance_km: (route.distance || 0) / 1000,
+        duration_min: (route.duration || 0) / 60,
+        alerts: [],
+        profile_applied: payload.vehicle_profile,
+        ordered_waypoints: payload.waypoints,
+        navigation_steps: steps,
+      };
+      guardDetourActive = true;
+      drawResult(data);
+      showToast("ガード回避ルートを適用中", true);
+      els.statusChip.textContent = "ガード回避ルート適用中";
+      els.statusChip.className = "rounded-full px-2 py-0.5 text-xs font-bold bg-amber-100 text-amber-700";
+      updateGuardStatus([]);
+      const gtext = `迂回適用（最低制限高 ${Math.min(...triggered.map((g) => g.max_height_m)).toFixed(1)} m 回避）`;
+      els.guardStatus.textContent = gtext;
+      els.guardStatus.className = "mt-1 text-xs text-amber-400";
+    } catch (e) {
+      showToast("迂回ルート取得に失敗: " + e.message, false);
+    } finally {
+      guardDetourInProgress = false;
+    }
   }
 
   function haversineMeters(lat1, lng1, lat2, lng2) {
