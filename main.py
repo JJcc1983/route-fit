@@ -32,10 +32,12 @@ from schemas import (
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+INDEX_FILE = BASE_DIR / "index.html"
 
 app = FastAPI(title="RouteFit API", version="0.3.0")
 
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/api/presets")
@@ -122,4 +124,5 @@ async def post_extract_addresses(
 
 @app.get("/")
 async def read_index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    index_path = INDEX_FILE if INDEX_FILE.exists() else (STATIC_DIR / "index.html")
+    return FileResponse(index_path)
