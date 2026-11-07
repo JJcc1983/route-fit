@@ -1,0 +1,1859 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RouteFit - 車高適性マルチストップルート探索</title>
+  <link rel="icon" href="data:,">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.min.js"></script>
+  <style>
+    body { font-family: "Helvetica Neue", "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif; }
+    #map { background: #eef2f6; }
+    .vehicle-warn-icon {
+      background: #b91c1c;
+      color: #fff;
+      border: 2px solid #fff;
+      border-radius: 9999px;
+      width: 30px !important;
+      height: 30px !important;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.8rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+    }
+    .vehicle-start-icon {
+      background: #047857;
+      color: #fff;
+      border: 2px solid #fff;
+      border-radius: 9999px;
+      width: 30px !important;
+      height: 30px !important;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.8rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+    }
+    .waypoint-badge {
+      background: #f59e0b;
+      color: #fff;
+      border: 2px solid #fff;
+      border-radius: 9999px;
+      width: 28px !important;
+      height: 28px !important;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.8rem;
+      box-shadow: 0 1px 5px rgba(180,83,9,0.55);
+    }
+    .restriction-icon {
+      font-size: 1.6rem;
+      line-height: 1;
+      filter: drop-shadow(0 2px 2px rgba(0,0,0,0.4));
+    }
+    .moped-badge {
+      background: #4f46e5;
+      color: #fff;
+      border: 2px solid #fff;
+      border-radius: 9999px;
+      width: 34px !important;
+      height: 34px !important;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.8rem;
+      box-shadow: 0 1px 6px rgba(79,70,229,0.6);
+    }
+    .leaflet-popup-content { margin: 10px 12px; font-size: 0.85rem; line-height: 1.5; }
+    .leaflet-popup-content strong { display: block; margin-bottom: 2px; }
+    .suggestion-item:hover { background: #e0e7ff; cursor: pointer; }
+    .leaflet-nav-pane { transition: rotate 0.2s linear; }
+    .leaflet-overlay-pane svg { overflow: visible; }
+    .icon-inner {
+      display: inline-block;
+      rotate: var(--icon-rotate, 0deg);
+      transition: rotate 0.2s linear;
+    }
+    .nav-rotate-target { rotate: var(--nav-counter-rotate, 0deg); }
+    .car-marker-icon {
+      background: #1d4ed8;
+      color: #fff;
+      border: 3px solid #fff;
+      border-radius: 9999px;
+      width: 34px !important;
+      height: 34px !important;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      box-shadow: 0 2px 8px rgba(29,78,216,0.6);
+    }
+    .gps-dot-icon {
+      background: #2563eb;
+      border: 3px solid #fff;
+      border-radius: 9999px;
+      width: 22px !important;
+      height: 22px !important;
+      box-shadow: 0 0 0 6px rgba(37,99,235,0.25);
+    }
+  </style>
+</head>
+<body class="h-screen overflow-hidden">
+<div class="flex flex-col md:flex-row h-full">
+
+  <aside class="w-full md:w-[400px] shrink-0 bg-slate-900 text-slate-100 overflow-y-auto">
+    <div class="p-5 border-b border-slate-700">
+      <h1 class="text-lg font-bold tracking-wide">RouteFit</h1>
+      <p class="text-xs text-slate-400 mt-1">マルチストップ（配送・経由地）対応の車両適性ルート探索</p>
+    </div>
+
+    <div class="p-5 space-y-6">
+      <section>
+        <label for="vehicle-preset" class="block text-sm font-semibold mb-2">車両プリセット</label>
+        <select id="vehicle-preset"
+                class="w-full rounded-md bg-slate-800 border border-slate-600 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option value="">読み込み中...</option>
+        </select>
+        <p id="vehicle-summary" class="mt-2 text-xs text-slate-400"></p>
+      </section>
+
+      <section class="space-y-4">
+        <h2 class="text-sm font-semibold">寸法微調整</h2>
+        <div>
+          <div class="flex justify-between text-xs mb-1">
+            <span>全高 height_m</span>
+            <span id="height-value" class="font-mono text-sky-300">-</span>
+          </div>
+          <input id="height-slider" type="range" min="0.8" max="4.0" step="0.01"
+                 class="w-full accent-sky-500" value="1.95">
+        </div>
+        <div>
+          <div class="flex justify-between text-xs mb-1">
+            <span>全幅 width_m</span>
+            <span id="width-value" class="font-mono text-sky-300">-</span>
+          </div>
+          <input id="width-slider" type="range" min="0.5" max="2.6" step="0.01"
+                 class="w-full accent-sky-500" value="1.47">
+        </div>
+        <div>
+          <div class="flex justify-between text-xs mb-1">
+            <span>重量 weight_t</span>
+            <span id="weight-value" class="font-mono text-sky-300">-</span>
+          </div>
+          <input id="weight-slider" type="range" min="0.1" max="9.0" step="0.1"
+                 class="w-full accent-sky-500" value="1.5">
+        </div>
+        <div class="rounded-md border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs">
+          <p class="text-slate-400">ガード判定（全高＋安全マージン）</p>
+          <p id="effective-height" class="font-mono text-base mt-0.5">-</p>
+          <p id="guard-status" class="mt-1 text-xs text-slate-400">ルート上の最低制限高: 検出なし</p>
+        </div>
+        <p class="mt-2 text-[0.75rem] leading-snug text-amber-300/90 border border-amber-500/30 bg-amber-500/5 rounded px-2 py-1.5">
+          ⚠️ デモ検証版: 高さ制限・交通規制データは一部テスト地点のみ登録されています。走行時は必ず現地の実際の道路標識・道路状況に従ってください。
+        </p>
+      </section>
+
+      <section class="space-y-3">
+        <h2 class="text-sm font-semibold">地点（出発地・経由地・目的地）</h2>
+
+        <div class="relative rounded-md border border-slate-700 bg-slate-800/40 p-2">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-xs font-bold text-emerald-300">🟢 出発地</span>
+          </div>
+          <div class="flex gap-2">
+            <input id="origin-input" type="text" autocomplete="off"
+                   class="flex-1 rounded-md bg-slate-800 border border-slate-600 px-3 py-2 text-sm placeholder-slate-500"
+                   placeholder="例: 大阪市北区中津1-4">
+            <button id="origin-search"
+                    class="shrink-0 rounded-md bg-slate-700 hover:bg-slate-600 px-3 py-2 text-sm"
+                    title="出発地を検索">🔍</button>
+          </div>
+          <ul id="origin-suggestions"
+              class="hidden absolute z-[1100] left-2 right-2 mt-1 max-h-52 overflow-y-auto rounded-md border border-slate-600 bg-white text-xs text-slate-800 shadow-xl"></ul>
+        </div>
+
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-amber-300">🟡 経由地／配送先</span>
+            <span class="text-xs text-slate-400">地図クリックで「経由地に追加」可</span>
+          </div>
+          <div id="waypoint-container" class="space-y-2"></div>
+          <button id="add-waypoint"
+                  class="w-full rounded-md border border-dashed border-amber-500/70 px-3 py-2 text-xs font-bold text-amber-300 hover:bg-amber-500/10">
+            ➕ 経由地／配送先を追加
+          </button>
+          <button id="optimize-button" disabled
+                  class="w-full rounded-md bg-gradient-to-r from-amber-500 to-orange-500 disabled:from-slate-600 disabled:to-slate-600 px-3 py-2.5 text-sm font-bold text-white shadow-lg transition-opacity disabled:opacity-50">
+            ⚡ 巡回順を最短に最適化
+          </button>
+          <button id="receipt-button"
+                  class="w-full rounded-md border border-emerald-500/70 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20">
+            📷 伝票・画像から配送先を追加（複数枚OK）
+          </button>
+          <input type="file" accept="image/*" id="receipt-upload" multiple style="display:none;">
+          <div class="mt-2 space-y-1">
+            <label class="text-xs text-slate-400 flex items-center gap-1">Gemini API Key <span id="gemini-key-badge" class="hidden text-[0.65rem] text-emerald-400">✓設定済み</span></label>
+            <div class="api-key-container flex gap-1.5 items-center w-full">
+              <div class="api-key-input-wrap relative flex-1">
+                <input type="password" id="gemini-api-key" placeholder="AIzaSy... (Gemini APIキー)" class="api-key-input w-full rounded-md bg-slate-800 border border-slate-600 px-2 py-1.5 text-xs pr-8 box-border" autocomplete="off">
+                <button id="gemini-key-toggle" type="button" class="toggle-visibility-btn absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs bg-transparent border-none cursor-pointer">表示</button>
+              </div>
+              <button id="gemini-key-save" type="button" class="save-btn shrink-0 rounded-md bg-slate-700 hover:bg-slate-600 px-2.5 py-1.5 text-xs whitespace-nowrap">保存</button>
+            </div>
+            <p class="text-[0.7rem] text-slate-500 mt-1">キーは端末（ブラウザ）内にのみ安全に保存されます。 <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" class="text-sky-400 underline">APIキー取得 (Google AI Studio)</a></p>
+          </div>
+          <p class="text-xs text-slate-500">複数画像の同時選択、ドラッグ&ドロップ、クリップボード貼り付け（Ctrl+V）に対応。1枚に複数伝票が写っている場合も一括抽出します。</p>
+        </div>
+
+        <div class="relative rounded-md border border-slate-700 bg-slate-800/40 p-2">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-xs font-bold text-red-300">🔴 目的地</span>
+          </div>
+          <div class="flex gap-2">
+            <input id="destination-input" type="text" autocomplete="off"
+                   class="flex-1 rounded-md bg-slate-800 border border-slate-600 px-3 py-2 text-sm placeholder-slate-500"
+                   placeholder="例: 大阪市中央区南船場2丁目">
+            <button id="destination-search"
+                    class="shrink-0 rounded-md bg-slate-700 hover:bg-slate-600 px-3 py-2 text-sm"
+                    title="目的地を検索">🔍</button>
+          </div>
+          <ul id="destination-suggestions"
+              class="hidden absolute z-[1100] left-2 right-2 mt-1 max-h-52 overflow-y-auto rounded-md border border-slate-600 bg-white text-xs text-slate-800 shadow-xl"></ul>
+        </div>
+
+        <div class="flex flex-wrap gap-2">
+          <button id="quick-osaka-juso"
+                  class="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700">
+            [大阪駅→十三]
+          </button>
+          <button id="quick-osaka-shin"
+                  class="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700">
+            [大阪駅→新大阪]
+          </button>
+          <button id="quick-utsubo-minami"
+                  class="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700">
+            [靭公園 ➔ 南船場（2.0m）]
+          </button>
+          <button id="quick-delivery-3"
+                  class="rounded-md border border-amber-500/70 px-2 py-1 text-xs font-bold text-amber-300 hover:bg-amber-500/10">
+            [配送3件巡回テスト]
+          </button>
+          <button id="quick-optimize-test"
+                  class="rounded-md border border-amber-500/70 px-2 py-1 text-xs font-bold text-amber-300 hover:bg-amber-500/10">
+            [⚡ 巡回最適化テスト]
+          </button>
+          <button id="quick-address-test"
+                  class="rounded-md border border-sky-500/70 px-2 py-1 text-xs font-bold text-sky-300 hover:bg-sky-500/10">
+            [📍 番地ピンポイントテスト]
+          </button>
+        </div>
+      </section>
+
+      <button id="route-button"
+              class="w-full rounded-md bg-sky-600 hover:bg-sky-500 disabled:bg-slate-600 px-4 py-3 text-sm font-bold tracking-wide transition-colors">
+        ルート探索
+      </button>
+
+      <div class="flex gap-2">
+        <button id="nav-toggle" disabled
+                class="flex-1 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-600 disabled:opacity-50 px-3 py-2 text-xs font-bold">
+          🚗 ナビ開始
+        </button>
+        <button id="demo-drive" disabled
+                class="flex-1 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 disabled:bg-slate-600 disabled:opacity-50 px-3 py-2 text-xs font-bold">
+          🏎️ デモ走行テスト
+        </button>
+      </div>
+      <button id="compass-toggle"
+              class="w-full rounded-md border border-slate-600 px-3 py-2 text-xs text-slate-300 hover:bg-slate-700">
+        🧭 方位: ノースアップ
+      </button>
+
+      <p id="error-message" class="hidden rounded-md border border-red-500/60 bg-red-950/40 px-3 py-2 text-xs text-red-300"></p>
+    </div>
+  </aside>
+
+  <main class="relative flex-1 min-h-[320px]">
+    <div id="map" class="absolute inset-0 z-0"></div>
+
+    <div id="guidance-bar"
+         class="hidden absolute top-3 left-1/2 z-[1200] w-[22rem] max-w-[calc(100%-1.5rem)] -translate-x-1/2 rounded-xl bg-slate-900/95 px-4 py-3 text-white shadow-2xl backdrop-blur">
+      <div class="flex items-center gap-3">
+        <span id="nav-icon" class="text-3xl leading-none">⬆️</span>
+        <div class="min-w-0 flex-1">
+          <p id="nav-distance" class="font-mono text-lg font-bold leading-tight">あと - m</p>
+          <p id="nav-road" class="truncate text-xs text-slate-300">次の道路</p>
+        </div>
+        <span id="nav-mode" class="shrink-0 rounded-full bg-indigo-500/80 px-2 py-0.5 text-xs font-bold">案内中</span>
+      </div>
+    </div>
+
+    <div id="info-panel"
+         class="absolute top-3 right-3 z-[1000] w-72 space-y-2 max-h-[calc(100%-1.5rem)] overflow-y-auto">
+      <div class="rounded-lg bg-white/95 shadow-lg backdrop-blur px-4 py-3">
+        <div class="flex items-center justify-between">
+          <span id="status-chip"
+                class="rounded-full px-2 py-0.5 text-xs font-bold bg-slate-200 text-slate-600">待機中</span>
+          <span id="vehicle-name" class="text-xs text-slate-500 truncate max-w-[150px]"></span>
+        </div>
+        <div class="mt-1">
+          <span id="speed-badge"
+                class="inline-block rounded-full bg-sky-100 px-2 py-0.5 text-xs font-bold text-sky-700">法定速度上限: -</span>
+        </div>
+        <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <p class="text-xs text-slate-500">総距離</p>
+            <p id="distance-value" class="font-mono font-bold text-slate-800">- km</p>
+          </div>
+          <div>
+            <p class="text-xs text-slate-500">所要時間</p>
+            <p id="duration-value" class="font-mono font-bold text-slate-800">- 分</p>
+          </div>
+        </div>
+        <p id="stop-summary" class="mt-2 text-xs text-slate-500">地点数: 2</p>
+      </div>
+      <div id="alert-list" class="space-y-2"></div>
+    </div>
+  </main>
+</div>
+
+<div id="toast"
+     class="hidden fixed bottom-6 left-1/2 z-[2000] -translate-x-1/2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-xl"></div>
+
+<script>
+  const QUICK_OD = {
+    osakaToJuso: {
+      origin: { name: "大阪駅（梅田）", lat: 34.7025, lng: 135.4950 },
+      destination: { name: "十三（阪急）", lat: 34.7186, lng: 135.4809 },
+      waypoints: [],
+    },
+    osakaToShin: {
+      origin: { name: "大阪駅（梅田）", lat: 34.7025, lng: 135.4950 },
+      destination: { name: "新大阪駅", lat: 34.7333, lng: 135.5000 },
+      waypoints: [],
+    },
+    utsuboToMinamisemba: {
+      origin: { name: "靭公園", lat: 34.6815, lng: 135.4865 },
+      destination: { name: "南船場", lat: 34.6790, lng: 135.5010 },
+      waypoints: [],
+    },
+    deliveryThree: {
+      origin: { name: "梅田（阪急グランド）", lat: 34.7028, lng: 135.4943 },
+      destination: { name: "十三（阪急）", lat: 34.7186, lng: 135.4809 },
+      waypoints: [
+        { name: "中津駅", lat: 34.7076, lng: 135.4926 },
+        { name: "新大阪駅", lat: 34.7333, lng: 135.5000 },
+      ],
+    },
+    optimizeTest: {
+      origin: { name: "梅田（阪急グランド）", lat: 34.7028, lng: 135.4943 },
+      destination: { name: "十三（阪急）", lat: 34.7186, lng: 135.4809 },
+      waypoints: [
+        { name: "新大阪駅", lat: 34.7333, lng: 135.5000 },
+        { name: "中津駅", lat: 34.7076, lng: 135.4926 },
+      ],
+    },
+  };
+
+  const DEFAULT_PRESET = "kei_truck";
+
+  const state = {
+    origin: { ...QUICK_OD.osakaToJuso.origin },
+    destination: { ...QUICK_OD.osakaToJuso.destination },
+    waypoints: [],
+  };
+
+  const els = {
+    preset: document.getElementById("vehicle-preset"),
+    summary: document.getElementById("vehicle-summary"),
+    heightSlider: document.getElementById("height-slider"),
+    heightValue: document.getElementById("height-value"),
+    widthSlider: document.getElementById("width-slider"),
+    widthValue: document.getElementById("width-value"),
+    weightSlider: document.getElementById("weight-slider"),
+    weightValue: document.getElementById("weight-value"),
+    effectiveHeight: document.getElementById("effective-height"),
+    guardStatus: document.getElementById("guard-status"),
+    originInput: document.getElementById("origin-input"),
+    destinationInput: document.getElementById("destination-input"),
+    originSearch: document.getElementById("origin-search"),
+    destinationSearch: document.getElementById("destination-search"),
+    originSuggestions: document.getElementById("origin-suggestions"),
+    destinationSuggestions: document.getElementById("destination-suggestions"),
+    waypointContainer: document.getElementById("waypoint-container"),
+    addWaypoint: document.getElementById("add-waypoint"),
+    quickOsakaJuso: document.getElementById("quick-osaka-juso"),
+    quickOsakaShin: document.getElementById("quick-osaka-shin"),
+    quickUtsuboMinami: document.getElementById("quick-utsubo-minami"),
+    quickDelivery3: document.getElementById("quick-delivery-3"),
+    quickOptimizeTest: document.getElementById("quick-optimize-test"),
+    quickAddressTest: document.getElementById("quick-address-test"),
+    optimizeButton: document.getElementById("optimize-button"),
+    receiptButton: document.getElementById("receipt-button"),
+    receiptUpload: document.getElementById("receipt-upload"),
+    geminiApiKey: document.getElementById("gemini-api-key"),
+    geminiKeyToggle: document.getElementById("gemini-key-toggle"),
+    geminiKeySave: document.getElementById("gemini-key-save"),
+    toast: document.getElementById("toast"),
+    error: document.getElementById("error-message"),
+    statusChip: document.getElementById("status-chip"),
+    vehicleName: document.getElementById("vehicle-name"),
+    speedBadge: document.getElementById("speed-badge"),
+    distance: document.getElementById("distance-value"),
+    duration: document.getElementById("duration-value"),
+    stopSummary: document.getElementById("stop-summary"),
+    alertList: document.getElementById("alert-list"),
+    button: document.getElementById("route-button"),
+    navToggle: document.getElementById("nav-toggle"),
+    demoDrive: document.getElementById("demo-drive"),
+    compassToggle: document.getElementById("compass-toggle"),
+    guidanceBar: document.getElementById("guidance-bar"),
+    navIcon: document.getElementById("nav-icon"),
+    navDistance: document.getElementById("nav-distance"),
+    navRoad: document.getElementById("nav-road"),
+    navMode: document.getElementById("nav-mode"),
+  };
+
+  const map = L.map("map", { zoomControl: true }).setView([34.710, 135.497], 14);
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+  }).addTo(map);
+
+  const routeLayer = L.layerGroup().addTo(map);
+  const restrictionLayer = L.layerGroup().addTo(map);
+
+  let presets = {};
+  let searchTimer = null;
+  let searchSeq = 0;
+  let waypointMarkers = [];
+  const suggestionTimers = new Map();
+
+  const navPane = L.DomUtil.create("div", "leaflet-nav-pane");
+  const mapPaneElement = map.getPane("mapPane");
+  while (mapPaneElement.firstChild) {
+    navPane.appendChild(mapPaneElement.firstChild);
+  }
+  mapPaneElement.appendChild(navPane);
+
+  const NAV_DEMO_SPEED_MPS = 18;
+  const NAV_APPROACH_M = 150;
+  const nav = {
+    active: false,
+    busy: false,
+    mode: "demo",
+    coords: [],
+    cum: [],
+    total: 0,
+    basePolyline: null,
+    passedLine: null,
+    remainingLine: null,
+    highlightLine: null,
+    decorator: null,
+    routeCoords: [],
+    beaconLine: null,
+    maneuvers: [],
+    currentCum: 0,
+    bearing: 0,
+    headingUp: false,
+    lastFrame: 0,
+    rafId: null,
+    watchId: null,
+    marker: null,
+    announced300: new Set(),
+    announced50: new Set(),
+    announcedSpots: new Set(),
+    finished: false,
+    lastResult: null,
+  };
+
+  const endpointIcon = (label, cls) => L.divIcon({
+    className: cls,
+    html: `<span class="icon-inner">${label}</span>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+  });
+
+  const waypointIcon = (index) => L.divIcon({
+    className: "waypoint-badge",
+    html: `<span class="icon-inner">${index + 1}</span>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  });
+
+  const originMarker = L.marker(
+    [state.origin.lat, state.origin.lng],
+    { icon: endpointIcon("出", "vehicle-start-icon"), draggable: true }
+  ).addTo(map);
+
+  const destinationMarker = L.marker(
+    [state.destination.lat, state.destination.lng],
+    { icon: endpointIcon("到", "vehicle-warn-icon"), draggable: true }
+  ).addTo(map);
+
+  originMarker.bindPopup("出発地: " + state.origin.name);
+  destinationMarker.bindPopup("目的地: " + state.destination.name);
+
+  const coordLabel = (point) =>
+    `指定地点（${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}）`;
+
+  function setEndpoint(kind, point) {
+    const name = point.name || point.display_name || coordLabel(point);
+    state[kind] = { lat: point.lat, lng: point.lng, name };
+    const marker = kind === "origin" ? originMarker : destinationMarker;
+    const label = kind === "origin" ? "出発地" : "目的地";
+    marker.setLatLng([point.lat, point.lng]);
+    marker.setPopupContent(`${label}: ${name}`);
+    if (kind === "origin") {
+      els.originInput.value = name;
+    } else {
+      els.destinationInput.value = name;
+    }
+  }
+
+  function rebuildWaypointMarkers() {
+    waypointMarkers.forEach((marker) => marker.remove());
+    waypointMarkers = state.waypoints.map((point, index) => {
+      const marker = L.marker(
+        [point.lat, point.lng],
+        { icon: waypointIcon(index), draggable: true }
+      ).addTo(map).bindPopup(`経由地${index + 1}: ${point.name}`);
+      marker.on("dragend", () => {
+        const pos = marker.getLatLng();
+        state.waypoints[index] = { lat: pos.lat, lng: pos.lng, name: coordLabel(pos) };
+        marker.setPopupContent(`経由地${index + 1}: ${state.waypoints[index].name}`);
+        renderWaypointRows();
+        runSearch();
+      });
+      return marker;
+    });
+  }
+
+  function renderWaypointRows() {
+    els.waypointContainer.innerHTML = "";
+    state.waypoints.forEach((point, index) => {
+      const row = document.createElement("div");
+      row.className = "relative flex gap-2 items-center rounded-md border border-slate-700 bg-slate-800/40 p-2";
+      row.innerHTML = `
+        <span class="waypoint-badge shrink-0" style="width:24px;height:24px;font-size:0.7rem;">${index + 1}</span>
+        <input type="text" autocomplete="off" data-waypoint-input="${index}"
+               class="waypoint-input flex-1 rounded-md bg-slate-800 border border-slate-600 px-2 py-1.5 text-xs placeholder-slate-500"
+               placeholder="経由地を検索（例: 中津駅）">
+        <button data-waypoint-search="${index}"
+                class="shrink-0 rounded-md bg-slate-700 hover:bg-slate-600 px-2 py-1.5 text-xs"
+                title="経由地を検索">🔍</button>
+        <button data-waypoint-delete="${index}"
+                class="shrink-0 rounded-md bg-red-900/70 hover:bg-red-700 px-2 py-1.5 text-xs"
+                title="この経由地を削除">🗑️</button>
+        <ul data-waypoint-suggestions="${index}"
+            class="hidden absolute z-[1100] left-8 right-2 top-full mt-1 max-h-44 overflow-y-auto rounded-md border border-slate-600 bg-white text-xs text-slate-800 shadow-xl"></ul>`;
+      const input = row.querySelector(`[data-waypoint-input="${index}"]`);
+      input.value = point.name;
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          confirmGeocode(index);
+        }
+      });
+      input.addEventListener("input", () => scheduleSuggestions(index));
+      row.querySelector(`[data-waypoint-search="${index}"]`)
+        .addEventListener("click", () => confirmGeocode(index));
+      row.querySelector(`[data-waypoint-delete="${index}"]`)
+        .addEventListener("click", () => removeWaypoint(index));
+      els.waypointContainer.appendChild(row);
+    });
+    syncOptimizeButton();
+    if (nav.active) setNavLock(true);
+  }
+
+  function syncOptimizeButton() {
+    const active = state.waypoints.length >= 2;
+    els.optimizeButton.disabled = !active;
+    els.optimizeButton.classList.toggle("opacity-50", !active);
+    els.optimizeButton.classList.toggle("cursor-not-allowed", !active);
+  }
+
+  function showToast(message, good = true, loading = false) {
+    els.toast.textContent = (loading ? "⏳ " : "") + message;
+    const palette = good
+      ? "bg-emerald-600"
+      : "bg-red-600";
+    els.toast.className =
+      "fixed bottom-6 left-1/2 z-[2000] -translate-x-1/2 rounded-lg "
+      + `${palette} px-4 py-2.5 text-sm font-bold text-white shadow-xl`
+      + (loading ? " animate-pulse" : "");
+    if (!loading) {
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(
+        () => els.toast.classList.add("hidden"),
+        6000
+      );
+    }
+  }
+
+  function addWaypoints(points) {
+    points.forEach((point) => {
+      state.waypoints.push({
+        lat: point.lat,
+        lng: point.lng,
+        name: point.display_name || point.name || coordLabel(point),
+      });
+    });
+    renderWaypointRows();
+    rebuildWaypointMarkers();
+    runSearch();
+  }
+
+  async function uploadReceipt(fileList) {
+    const files = Array.from(fileList || []).filter(
+      (file) => file.type && file.type.startsWith("image/")
+    );
+    if (!files.length) {
+      showToast("画像ファイルを選択してください", false);
+      return;
+    }
+    showToast(`AIが${files.length}枚の画像から住所を読み取り中...`, true, true);
+    els.receiptButton.disabled = true;
+    try {
+      const key = (function () { try { return (localStorage.getItem("gemini_api_key") || "").trim(); } catch (e) { return ""; } })();
+      if (!key) {
+        showToast("APIキーが設定されていません。設定欄からGemini APIキーを入力してください", false);
+        els.receiptButton.disabled = false;
+        return;
+      }
+      const form = new FormData();
+      files.forEach((file) => form.append("files", file));
+      const res = await fetch("/api/extract-addresses-from-images", {
+        method: "POST",
+        headers: { "X-Gemini-API-Key": key },
+        body: form,
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `image API ${res.status}`);
+      }
+      const data = await res.json();
+      const points = data.points || [];
+      if (!points.length) {
+        const info = (data.addresses || []).length
+          ? `住所「${data.addresses.join("、")}」の位置を特定できませんでした`
+          : "画像から住所を読み取れませんでした";
+        throw new Error(info);
+      }
+      addWaypoints(points);
+      showToast(`⚡ ${points.length}件の配送先を一括登録しました`, true);
+    } catch (e) {
+      showToast(e.message, false);
+    } finally {
+      els.receiptButton.disabled = false;
+    }
+  }
+
+  function addWaypoint(point) {
+    state.waypoints.push({
+      lat: point.lat,
+      lng: point.lng,
+      name: point.name || point.display_name || coordLabel(point),
+    });
+    renderWaypointRows();
+    rebuildWaypointMarkers();
+    runSearch();
+  }
+
+  function removeWaypoint(index) {
+    state.waypoints.splice(index, 1);
+    renderWaypointRows();
+    rebuildWaypointMarkers();
+    runSearch();
+  }
+
+  function setWaypoint(index, point) {
+    state.waypoints[index] = {
+      lat: point.lat,
+      lng: point.lng,
+      name: point.name || point.display_name || coordLabel(point),
+    };
+    waypointMarkers[index].setLatLng([point.lat, point.lng]);
+    waypointMarkers[index].setPopupContent(
+      `経由地${index + 1}: ${state.waypoints[index].name}`
+    );
+    renderWaypointRows();
+    runSearch();
+  }
+
+  originMarker.on("dragend", () => {
+    const pos = originMarker.getLatLng();
+    setEndpoint("origin", { lat: pos.lat, lng: pos.lng, name: coordLabel(pos) });
+    runSearch();
+  });
+
+  destinationMarker.on("dragend", () => {
+    const pos = destinationMarker.getLatLng();
+    setEndpoint("destination", { lat: pos.lat, lng: pos.lng, name: coordLabel(pos) });
+    runSearch();
+  });
+
+  map.on("click", (e) => {
+    if (nav.active) return;
+    L.popup()
+      .setLatLng(e.latlng)
+      .setContent(
+        `<strong>地点を設定</strong>`
+        + `${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}`
+        + `<div class="mt-2 space-y-1">`
+        + `<button data-endpoint="origin" class="w-full rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-left text-xs text-emerald-800 hover:bg-emerald-100">🟢 出発地に設定</button>`
+        + `<button data-endpoint="waypoint" class="w-full rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-left text-xs text-amber-800 hover:bg-amber-100">🟡 経由地に追加</button>`
+        + `<button data-endpoint="destination" class="w-full rounded-md border border-red-300 bg-red-50 px-2 py-1 text-left text-xs text-red-800 hover:bg-red-100">🔴 目的地に設定</button>`
+        + `</div>`
+      )
+      .openOn(map);
+  });
+
+  map.on("popupopen", (e) => {
+    const container = e.popup.getElement();
+    const latlng = e.popup.getLatLng();
+    container?.querySelectorAll("button[data-endpoint]").forEach((button) => {
+      button.onclick = () => {
+        const kind = button.dataset.endpoint;
+        if (kind === "waypoint") {
+          addWaypoint({ lat: latlng.lat, lng: latlng.lng });
+        } else {
+          setEndpoint(kind, { lat: latlng.lat, lng: latlng.lng });
+          runSearch();
+        }
+        map.closePopup();
+      };
+    });
+  });
+
+  function baseProfile() {
+    return presets[els.preset.value] || null;
+  }
+
+  function currentProfile() {
+    const base = baseProfile();
+    if (!base) return null;
+    return {
+      ...base,
+      height_m: parseFloat(els.heightSlider.value),
+      width_m: parseFloat(els.widthSlider.value),
+      weight_t: parseFloat(els.weightSlider.value),
+    };
+  }
+
+  function applyPresetToSliders() {
+    const base = baseProfile();
+    if (!base) return;
+    els.heightSlider.value = String(base.height_m);
+    els.widthSlider.value = String(base.width_m);
+    els.weightSlider.value = String(base.weight_t);
+    updateSizeLabels();
+    runSearch();
+  }
+
+  function speedBadgeText(profile) {
+    if (!profile) return "法定速度上限: -";
+    const city = Number(profile.max_speed_city_kmh.toFixed(2));
+    const highway = Number(profile.max_speed_highway_kmh.toFixed(2));
+    return city === highway
+      ? `法定速度上限: ${city}km/h`
+      : `法定速度上限: 一般${city} / 高速${highway}km/h`;
+  }
+
+  function updateSizeLabels() {
+    const p = baseProfile();
+    els.summary.textContent = p
+      ? `全高 ${p.height_m.toFixed(2)}m / 全幅 ${p.width_m.toFixed(2)}m / 重量 ${p.weight_t.toFixed(1)}t`
+        + ` / 最高速度 ${speedBadgeText(p).replace("法定速度上限: ", "")}`
+      : "";
+    els.speedBadge.textContent = speedBadgeText(p);
+    els.heightValue.textContent = `${parseFloat(els.heightSlider.value).toFixed(2)} m`;
+    els.widthValue.textContent = `${parseFloat(els.widthSlider.value).toFixed(2)} m`;
+    els.weightValue.textContent = `${parseFloat(els.weightSlider.value).toFixed(1)} t`;
+    const profile = currentProfile();
+    if (profile) {
+      const effective = profile.height_m + profile.height_margin_m;
+      els.effectiveHeight.textContent = `決定値 ${effective.toFixed(2)} m`;
+    } else {
+      els.effectiveHeight.textContent = "-";
+    }
+  }
+
+  function updateGuardStatus(alerts) {
+    const profile = currentProfile();
+    const effective = profile ? profile.height_m + profile.height_margin_m : null;
+    if (!alerts || alerts.length === 0) {
+      els.guardStatus.textContent = "ルート上の最低制限高: 検出なし";
+      els.guardStatus.className = "mt-1 text-xs text-slate-400";
+      return;
+    }
+    const limits = [];
+    alerts.forEach((alert) => {
+      const matched = (alert.title || "").match(/高さ(?:制限)?\s*([\d.]+)m/);
+      if (matched) limits.push(parseFloat(matched[1]));
+    });
+    if (limits.length > 0) {
+      const lowest = Math.min(...limits);
+      const blocked = effective !== null && effective > lowest;
+      els.guardStatus.textContent = `ルート上の最低制限高: ${lowest.toFixed(1)} m`;
+      els.guardStatus.className = blocked
+        ? "mt-1 text-xs font-bold text-red-300"
+        : "mt-1 text-xs font-bold text-emerald-300";
+    } else {
+      els.guardStatus.textContent = `ルート上の検出: ${alerts.length}件（重量制限等）`;
+      els.guardStatus.className = "mt-1 text-xs font-bold text-amber-300";
+    }
+  }
+
+  function showError(message) {
+    els.error.textContent = message;
+    els.error.classList.remove("hidden");
+  }
+
+  function clearError() {
+    els.error.classList.add("hidden");
+    els.error.textContent = "";
+  }
+
+  function hideSuggestions(list) {
+    list.classList.add("hidden");
+    list.innerHTML = "";
+  }
+
+  function renderSuggestions(list, items, onSelect) {
+    list.innerHTML = "";
+    if (!items.length) {
+      list.innerHTML = `<li class="px-3 py-2 text-slate-500">候補が見つかりませんでした</li>`;
+      list.classList.remove("hidden");
+      return;
+    }
+    items.forEach((item) => {
+      const li = document.createElement("li");
+      li.className = "suggestion-item border-b border-slate-100 px-3 py-2 last:border-0";
+      li.textContent = item.display_name;
+      li.addEventListener("click", () => onSelect(item));
+      list.appendChild(li);
+    });
+    list.classList.remove("hidden");
+  }
+
+  function geocodeTargets(key) {
+    if (key === "origin") {
+      return { input: els.originInput, list: els.originSuggestions };
+    }
+    if (key === "destination") {
+      return { input: els.destinationInput, list: els.destinationSuggestions };
+    }
+    return {
+      input: document.querySelector(`[data-waypoint-input="${key}"]`),
+      list: document.querySelector(`[data-waypoint-suggestions="${key}"]`),
+    };
+  }
+
+  async function fetchGeocode(query) {
+    const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || `geocode API ${res.status}`);
+    }
+    return res.json();
+  }
+
+  function chooseGeocodeResult(key, item) {
+    if (key === "origin") {
+      setEndpoint("origin", item);
+      runSearch();
+    } else if (key === "destination") {
+      setEndpoint("destination", item);
+      runSearch();
+    } else {
+      setWaypoint(key, item);
+    }
+  }
+
+  async function showSuggestions(key) {
+    const { input, list } = geocodeTargets(key);
+    const query = (input?.value || "").trim();
+    if (query.length < 2) {
+      hideSuggestions(list);
+      return;
+    }
+    try {
+      const items = await fetchGeocode(query);
+      if ((input?.value || "").trim() !== query) {
+        return;
+      }
+      renderSuggestions(list, items, (item) => {
+        chooseGeocodeResult(key, item);
+        hideSuggestions(list);
+      });
+    } catch (e) {
+      showError(`場所の検索に失敗しました: ${e.message}`);
+    }
+  }
+
+  async function confirmGeocode(key) {
+    const { input, list } = geocodeTargets(key);
+    const query = (input?.value || "").trim();
+    window.clearTimeout(suggestionTimers.get(key));
+    if (!query) {
+      showToast("該当する住所が見つかりませんでした（検索語を入力してください）", false);
+      return;
+    }
+    clearError();
+    try {
+      const items = await fetchGeocode(query);
+      if (!items.length) {
+        hideSuggestions(list);
+        showToast(`該当する住所が見つかりませんでした: ${query}`, false);
+        return;
+      }
+      chooseGeocodeResult(key, items[0]);
+      hideSuggestions(list);
+      showToast(`📍 ${items[0].display_name} を設定しました`, true);
+    } catch (e) {
+      showError(`場所の検索に失敗しました: ${e.message}`);
+    }
+  }
+
+  function searchGeocode(key) {
+    showSuggestions(key);
+  }
+
+  function scheduleSuggestions(key) {
+    window.clearTimeout(suggestionTimers.get(key));
+    suggestionTimers.set(
+      key,
+      window.setTimeout(() => showSuggestions(key), 500)
+    );
+  }
+
+  function pointAtDistance(cum) {
+    const coords = nav.coords;
+    if (!coords.length) return null;
+    if (coords.length === 1) return coords[0];
+    const target = Math.max(0, Math.min(cum, nav.total));
+    let low = 0;
+    let high = nav.cum.length - 1;
+    while (low < high - 1) {
+      const mid = (low + high) >> 1;
+      if (nav.cum[mid] <= target) low = mid;
+      else high = mid;
+    }
+    const segLen = nav.cum[high] - nav.cum[low];
+    const t = segLen > 0 ? (target - nav.cum[low]) / segLen : 0;
+    const a = coords[low];
+    const b = coords[high];
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  }
+
+  function bearingBetween(from, to) {
+    const lat1 = (from[0] * Math.PI) / 180;
+    const lat2 = (to[0] * Math.PI) / 180;
+    const dLng = ((to[1] - from[1]) * Math.PI) / 180;
+    const y = Math.sin(dLng) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2)
+      - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+    const deg = (Math.atan2(y, x) * 180) / Math.PI;
+    return (deg + 360) % 360;
+  }
+
+  function projectCum(lat, lng) {
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < nav.coords.length - 1; i++) {
+      const a = nav.coords[i];
+      const b = nav.coords[i + 1];
+      const rel = relativeMeters(lat, lng, (a[0] + b[0]) / 2);
+      const ax = metersX(a[1], (a[0] + b[0]) / 2);
+      const ay = metersY(a[0]);
+      const bx = metersX(b[1], (a[0] + b[0]) / 2);
+      const by = metersY(b[0]);
+      const dx = bx - ax;
+      const dy = by - ay;
+      const lenSq = dx * dx + dy * dy;
+      const t = lenSq > 0 ? Math.max(0, Math.min(1, (rel.x * dx + rel.y * dy) / lenSq)) : 0;
+      const px = ax + dx * t;
+      const py = ay + dy * t;
+      const dist = Math.hypot(rel.x - px, rel.y - py);
+      if (dist < bestDist) {
+        bestDist = dist;
+        const segLen = Math.hypot(dx, dy);
+        best = nav.cum[i] + segLen * t;
+      }
+    }
+    return best;
+  }
+
+  function metersX(lng, lat) { return (lng - 135.5) * 111320 * Math.cos(lat * Math.PI / 180); }
+  function metersY(lat) { return (lat - 34.7) * 110540; }
+  function relativeMeters(lat, lng, latRef) {
+    return { x: metersX(lng, latRef), y: metersY(lat) };
+  }
+
+  function maneuverInfo(step) {
+    const modifier = step.modifier || "";
+    const table = {
+      "left": { icon: "⬅️", phrase: "左方向" },
+      "right": { icon: "➡️", phrase: "右方向" },
+      "slight left": { icon: "↖️", phrase: "やや左方向" },
+      "slight right": { icon: "↗️", phrase: "やや右方向" },
+      "sharp left": { icon: "↩️", phrase: "左方向" },
+      "sharp right": { icon: "↪️", phrase: "右方向" },
+      "uturn": { icon: "🔃", phrase: "Uターン" },
+      "straight": { icon: "⬆️", phrase: "直進" },
+    };
+    if (table[modifier]) return table[modifier];
+    if (step.type === "arrive") return { icon: "🏁", phrase: "到着" };
+    if (step.type === "depart") return { icon: "⬆️", phrase: "出発" };
+    if (step.type === "roundabout" || step.type === "rotary") {
+      return { icon: "🔄", phrase: "ロータリー方面" };
+    }
+    if (step.type === "merge" || step.type === "on ramp") {
+      return { icon: "↗️", phrase: "合流" };
+    }
+    return { icon: "⬆️", phrase: "直進" };
+  }
+
+  function navSpeak(text) {
+    if (!("speechSynthesis" in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "ja-JP";
+      utterance.rate = 1.05;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn("speech failed", e);
+    }
+  }
+
+  function applyNavRotation() {
+    const center = map.latLngToLayerPoint(map.getCenter());
+    navPane.style.transformOrigin = `${center.x}px ${center.y}px`;
+    if (!nav.headingUp) {
+      // ノースアップ: 回転更新をスキップし、0deg に固定（トランジション無効で即時反映）
+      navPane.style.transition = "none";
+      navPane.style.transform = "none";
+      navPane.style.rotate = "0deg";
+      nav._displayRotation = 0;
+      map.getContainer().style.setProperty("--nav-counter-rotate", "0deg");
+      document.querySelectorAll(".icon-inner").forEach((el) => {
+        if (el.closest(".car-marker-icon")) {
+          el.style.setProperty("--icon-rotate", `${nav.bearing}deg`);
+        } else {
+          el.style.setProperty("--icon-rotate", "0deg");
+        }
+      });
+      return;
+    }
+    // ヘディングアップ: 最短角度で回転（大回り防止）
+    const target = -nav.bearing;
+    if (nav._displayRotation === undefined) nav._displayRotation = 0;
+    let delta = target - nav._displayRotation;
+    while (delta > 180) { delta -= 360; target -= 360; }
+    while (delta < -180) { delta += 360; target += 360; }
+    nav._displayRotation = target;
+    navPane.style.rotate = `${target}deg`;
+    const counter = "var(--icon-rotate, 0deg)";
+    map.getContainer().style.setProperty("--nav-counter-rotate", counter);
+    document.querySelectorAll(".icon-inner").forEach((el) => {
+      if (el.closest(".car-marker-icon")) {
+        el.style.setProperty("--icon-rotate", `${nav.bearing}deg`);
+      } else {
+        el.style.setProperty("--icon-rotate", `${nav.bearing}deg`);
+      }
+    });
+  }
+
+  function setIconInner(markerEl, bearing) {
+    const inner = markerEl?.querySelector(".icon-inner");
+    if (inner) inner.style.setProperty("--icon-rotate", `${bearing}deg`);
+  }
+
+  function buildNavRoute(result) {
+    nav.coords = (result.geometry?.coordinates || []).map(([lng, lat]) => [lat, lng]);
+    nav.cum = [0];
+    let total = 0;
+    for (let i = 1; i < nav.coords.length; i++) {
+      const a = nav.coords[i - 1];
+      const b = nav.coords[i];
+      const rel = relativeMeters(b[0], b[1], a[0]);
+      const relPrev = relativeMeters(a[0], a[1], a[0]);
+      total += Math.hypot(rel.x - relPrev.x, rel.y - relPrev.y);
+      nav.cum.push(total);
+    }
+    nav.total = total;
+    nav.maneuvers = (result.navigation_steps || []).map((step) => ({
+      ...step,
+      cum: projectCum(step.lat, step.lng),
+    }));
+    nav.spots = (result.alerts || []).map((alert) => ({
+      alert,
+      cum: projectCum(alert.lat, alert.lng),
+    }));
+  }
+
+  function updateGuidanceBar() {
+    const remainingEnd = nav.total - nav.currentCum;
+    if (remainingEnd < 15) {
+      els.navIcon.textContent = "🏁";
+      els.navDistance.textContent = "到着しました";
+      els.navRoad.textContent = "目的地";
+      return;
+    }
+    let next = null;
+    for (const step of nav.maneuvers) {
+      if (step.type === "depart") continue;
+      if (step.cum > nav.currentCum + 12) {
+        next = step;
+        break;
+      }
+    }
+    if (!next) {
+      els.navIcon.textContent = "⬆️";
+      els.navDistance.textContent = `あと ${Math.round(remainingEnd)} m`;
+      els.navRoad.textContent = "このまま直進";
+      return;
+    }
+    const info = maneuverInfo(next);
+    const remaining = next.cum - nav.currentCum;
+    els.navIcon.textContent = info.icon;
+    els.navDistance.textContent = `あと ${remaining >= 1000 ? (remaining / 1000).toFixed(1) + " km" : Math.round(remaining) + " m"}`;
+    els.navRoad.textContent = next.name || info.phrase;
+
+    const idx = nav.maneuvers.indexOf(next);
+    if (remaining <= 300 && remaining > 45 && !nav.announced300.has(idx)) {
+      nav.announced300.add(idx);
+      navSpeak(`およそ300メートル先、${info.phrase}です`);
+    }
+    if (remaining <= 45 && !nav.announced50.has(idx)) {
+      nav.announced50.add(idx);
+      navSpeak(`まもなく、${info.phrase}です`);
+    }
+    for (const spot of nav.spots || []) {
+      const delta = spot.cum - nav.currentCum;
+      if (delta >= -30 && delta <= NAV_APPROACH_M && !nav.announcedSpots.has(spot.cum)) {
+        nav.announcedSpots.add(spot.cum);
+        if (spot.alert.alert_type === "MOPED_BAN_AVOIDED") {
+          navSpeak("この先、二輪通行禁止区間を迂回します");
+        } else {
+          navSpeak("この先、高さ制限地点を迂回します");
+        }
+      }
+    }
+  }
+
+  function getNextTargetLatLng() {
+    const candidates = [];
+    waypointMarkers.forEach((m) => {
+      if (!m) return;
+      const ll = m.getLatLng();
+      candidates.push({ll, cum: projectCum(ll.lat, ll.lng)});
+    });
+    const destLl = destinationMarker.getLatLng();
+    candidates.push({ll: destLl, cum: projectCum(destLl.lat, destLl.lng)});
+    let best = null;
+    for (const c of candidates) {
+      if (c.cum > nav.currentCum + 5) {
+        if (!best || c.cum < best.cum) best = c;
+      }
+    }
+    if (!best && candidates.length) {
+      best = candidates.reduce((a, b) => (a.cum > b.cum ? a : b));
+    }
+    return best ? best.ll : null;
+  }
+
+  function updateBeaconLine() {
+    if (!nav.active || !nav.beaconLine) return;
+    const startLl = nav.marker ? nav.marker.getLatLng() : null;
+    const start = startLl ? [startLl.lat, startLl.lng] : pointAtDistance(nav.currentCum);
+    if (!start) return;
+    const targetLl = getNextTargetLatLng();
+    if (!targetLl) return;
+    nav.beaconLine.setLatLngs([start, [targetLl.lat, targetLl.lng]]);
+  }
+
+  function updateNavRouteLayers() {
+    if (!nav.active) return;
+    const coords = nav.routeCoords;
+    if (!coords || coords.length < 2) return;
+    const cur = nav.currentCum;
+    const passed = [];
+    let idx = 0;
+    for (let i = 0; i < coords.length - 1; i++) {
+      if (nav.cum[i + 1] <= cur + 1e-6) { passed.push(coords[i]); idx = i + 1; }
+      else break;
+    }
+    const curPt = pointAtDistance(cur);
+    if (curPt) passed.push(curPt);
+    const remaining = curPt ? [curPt] : [];
+    for (let i = idx; i < coords.length; i++) {
+      if (nav.cum[i] >= cur - 1e-6) remaining.push(coords[i]);
+    }
+    if (remaining.length < 2) remaining.push(coords[coords.length - 1]);
+    if (nav.passedLine) nav.passedLine.setLatLngs(passed.length >= 2 ? passed : []);
+    if (nav.remainingLine) nav.remainingLine.setLatLngs(remaining.length >= 2 ? remaining : []);
+    // highlight to next maneuver
+    let next = null;
+    for (const step of nav.maneuvers) {
+      if (step.type === "depart") continue;
+      if (step.cum > cur + 12) { next = step; break; }
+    }
+    const endCum = next ? next.cum : nav.total;
+    const highlight = curPt ? [curPt] : [coords[0]];
+    for (let i = idx; i < coords.length; i++) {
+      if (nav.cum[i] >= cur - 1e-6 && nav.cum[i] <= endCum + 1e-6) highlight.push(coords[i]);
+    }
+    const endPt = pointAtDistance(endCum);
+    if (endPt) highlight.push(endPt);
+    if (nav.highlightLine) nav.highlightLine.setLatLngs(highlight.length >= 2 ? highlight : []);
+    if (nav.decorator && typeof nav.decorator.setPaths === "function") {
+      // 矢印は現在ステップ＋次のステップの2区間に限定
+      const nonDepart = nav.maneuvers.filter((st) => st.type !== "depart");
+      // 現在進行中のステップ（cum >= cur の最初の案内地点）を特定
+      let curIdx = nonDepart.findIndex((st) => st.cum >= cur - 12);
+      if (curIdx < 0) curIdx = nonDepart.length - 1;
+      const aStart = cur;  // 現在地から前方のみ
+      // 現在ステップの残り + 次ステップ = curIdx+1 の cum まで
+      const aEnd = (curIdx + 1 < nonDepart.length) ? nonDepart[curIdx + 1].cum : nav.total;
+      const arrowCoords = [];
+      const sPt = pointAtDistance(aStart);
+      if (sPt) arrowCoords.push(sPt);
+      let aIdx = 0;
+      for (let i = 0; i < coords.length - 1; i++) {
+        if (nav.cum[i + 1] <= aStart + 1e-6) aIdx = i + 1;
+        else break;
+      }
+      for (let i = aIdx; i < coords.length; i++) {
+        if (nav.cum[i] >= aStart - 1e-6 && nav.cum[i] <= aEnd + 1e-6) arrowCoords.push(coords[i]);
+      }
+      const ePt = pointAtDistance(aEnd);
+      if (ePt) arrowCoords.push(ePt);
+      try {
+        if (arrowCoords.length >= 2) nav.decorator.setPaths([L.polyline(arrowCoords)]);
+        else nav.decorator.setPaths([]);
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  function navUpdatePosition(lat, lng) {
+    if (!nav.active) return;
+    try { nav.marker.setLatLng([lat, lng]); } catch (e) { console.warn(e); }
+    try {
+      const near = pointAtDistance(Math.min(nav.currentCum + 8, nav.total));
+      if (near) nav.bearing = bearingBetween([lat, lng], near);
+    } catch (e) { console.warn(e); }
+    // 追従（カメラセンタリング）を最優先で実行
+    // 座標バリデーション（NaN・null・範囲外を排除）
+    if (typeof lat !== "number" || typeof lng !== "number" || !isFinite(lat) || !isFinite(lng)) return;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
+    try {
+      const zoom = map.getZoom();
+      const safeZoom = (typeof zoom === "number" && isFinite(zoom)) ? zoom : 16;
+      map.setView([lat, lng], safeZoom, { animate: false, reset: false });
+    } catch (e) { console.warn(e); }
+    try { applyNavRotation(); } catch (e) { console.warn(e); }
+    try { updateGuidanceBar(); } catch (e) { console.warn(e); }
+    try { updateNavRouteLayers(); } catch (e) { console.warn(e); }
+    try { updateBeaconLine(); } catch (e) { console.warn(e); }
+  }
+
+  function navFrame(ts) {
+    if (!nav.active || nav.mode !== "demo") return;
+    const dt = Math.min(0.12, (ts - nav.lastFrame) / 1000 || 0);
+    nav.lastFrame = ts;
+    nav.currentCum += NAV_DEMO_SPEED_MPS * dt;
+    if (nav.currentCum >= nav.total - 5) {
+      nav.currentCum = nav.total;
+      const pos = pointAtDistance(nav.currentCum);
+      try { if (pos) navUpdatePosition(pos[0], pos[1]); } catch (e) { console.warn(e); }
+      finishNav("デモ走行が完了しました");
+      return;
+    }
+    const pos = pointAtDistance(nav.currentCum);
+    const ahead = pointAtDistance(nav.currentCum + 6);
+    if (pos && ahead) nav.bearing = bearingBetween(pos, ahead);
+    try { if (pos) navUpdatePosition(pos[0], pos[1]); } catch (e) { console.warn(e); }
+    nav.rafId = requestAnimationFrame(navFrame);
+  }
+
+  function finishNav(message) {
+    stopNav();
+    if (message) showToast(message, true);
+  }
+
+  function startNav(mode) {
+    if (!nav.lastResult) return;
+    if (nav.busy) return;
+    nav.busy = true;
+    stopNav();
+    buildNavRoute(nav.lastResult);
+    if (!nav.headingUp) {
+      navPane.style.transition = "none";
+      navPane.style.transform = "none";
+      navPane.style.rotate = "0deg";
+    }
+    if (nav.basePolyline) nav.basePolyline.setStyle({opacity: 0});
+    nav.passedLine = L.polyline([], {color: "#9ca3af", weight: 3, opacity: 0.45, dashArray: "4, 8", noClip: true}).addTo(routeLayer);
+    nav.beaconLine = L.polyline([], {color: "#FF007F", weight: 2, opacity: 0.75, dashArray: "4, 6", noClip: true}).addTo(routeLayer);
+    nav.remainingLine = L.polyline([], {color: nav.baseColor || "#059669", weight: nav.baseWeight || 5, opacity: 0.9, noClip: true}).addTo(routeLayer);
+    nav.highlightLine = L.polyline([], {color: "#00E5FF", weight: (nav.baseWeight || 5) + 3, opacity: 1, noClip: true}).addTo(routeLayer);
+    if (typeof L.polylineDecorator === "function") {
+      nav.decorator = L.polylineDecorator([], {
+        patterns: [{offset: 10, repeat: 80, symbol: L.Symbol.arrowHead({pixelSize: 14, pathOptions: {fillOpacity: 1, weight: 1, color: "#1e293b", fillColor: "#ffffff"}})}],
+      }).addTo(routeLayer);
+    }
+    nav.mode = mode;
+    nav.active = true;
+
+    nav.currentCum = 0;
+    setNavLock(true);
+    nav.finished = false;
+    nav.announced300 = new Set();
+    nav.announced50 = new Set();
+    nav.announcedSpots = new Set();
+    const start = pointAtDistance(0) || [state.origin.lat, state.origin.lng];
+    nav.marker = L.marker(start, {
+      icon: L.divIcon({
+        className: "car-marker-icon",
+        html: `<span class="icon-inner">🚗</span>`,
+        iconSize: [34, 34],
+        iconAnchor: [17, 17],
+      }),
+      zIndexOffset: 1000,
+    }).addTo(map);
+    els.guidanceBar.classList.remove("hidden");
+    els.navToggle.textContent = "🚗 ナビ停止";
+    els.demoDrive.textContent = "🏎️ 走行中...";
+    els.navMode.textContent = mode === "gps" ? "GPS追従" : "デモ走行";
+    navSpeak("ナビゲーションを開始します");
+    if (nav.spots && nav.spots.length) {
+      const first = nav.spots[0];
+      nav.announcedSpots.add(first.cum);
+      navSpeak(
+        first.alert.alert_type === "MOPED_BAN_AVOIDED"
+          ? "このルートは二輪通行禁止区間を迂回します"
+          : "このルートは高さ制限地点を迂回します"
+      );
+    }
+    if (mode === "gps") {
+      if (!navigator.geolocation) {
+        finishNav("このブラウザは位置情報に対応していません");
+        return;
+      }
+      nav.watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          nav.currentCum = projectCum(latitude, longitude);
+          navUpdatePosition(latitude, longitude);
+        },
+        () => {
+          finishNav("現在地を取得できませんでした（デモ走行をお試しください）");
+        },
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
+      );
+    } else {
+      nav.lastFrame = performance.now();
+      nav.rafId = requestAnimationFrame(navFrame);
+    }
+    updateNavRouteLayers();
+    updateBeaconLine();
+    syncNavButtons();
+  }
+
+  function stopNav() {
+    nav.active = false;
+    nav.busy = false;
+    setNavLock(false);
+    if (nav.basePolyline) nav.basePolyline.setStyle({opacity: 0.9});
+    if (nav.passedLine) { nav.passedLine.remove(); nav.passedLine = null; }
+    if (nav.remainingLine) { nav.remainingLine.remove(); nav.remainingLine = null; }
+    if (nav.highlightLine) { nav.highlightLine.remove(); nav.highlightLine = null; }
+    if (nav.decorator) { nav.decorator.remove(); nav.decorator = null; }
+    if (nav.beaconLine) { nav.beaconLine.remove(); nav.beaconLine = null; }
+    if (nav.rafId) cancelAnimationFrame(nav.rafId);
+    nav.rafId = null;
+    if (nav.watchId !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(nav.watchId);
+    }
+    nav.watchId = null;
+    if (nav.marker) {
+      nav.marker.remove();
+      nav.marker = null;
+    }
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    navPane.style.transform = "none";
+    navPane.style.rotate = "0deg";
+    nav._displayRotation = 0;
+    map.getContainer().style.setProperty("--nav-counter-rotate", "0deg");
+    document.querySelectorAll(".icon-inner").forEach((el) => {
+      el.style.setProperty("--icon-rotate", "0deg");
+    });
+    els.guidanceBar.classList.add("hidden");
+    syncNavButtons();
+  }
+
+  function syncNavButtons() {
+    const hasRoute = !!nav.lastResult;
+    els.navToggle.disabled = !hasRoute;
+    els.demoDrive.disabled = !hasRoute || nav.active;
+    els.navToggle.textContent = nav.active ? "🚗 ナビ停止" : "🚗 ナビ開始";
+    els.demoDrive.textContent = nav.active && nav.mode === "demo" ? "🏎️ 走行中..." : "🏎️ デモ走行テスト";
+  }
+
+  function setNavLock(locked) {
+    const ids = [
+      "vehicle-preset", "height-slider", "width-slider", "weight-slider",
+      "origin-input", "origin-search", "destination-input", "destination-search",
+      "add-waypoint", "route-button", "optimize-button", "receipt-button", "receipt-upload",
+      "quick-osaka-juso", "quick-osaka-shin", "quick-utsubo-minami", "quick-delivery-3",
+      "quick-optimize-test", "quick-address-test",
+    ];
+    ids.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = locked;
+    });
+    document.querySelectorAll("[data-waypoint-input],[data-waypoint-search],[data-waypoint-delete]").forEach((el) => {
+      el.disabled = locked;
+    });
+    // マーカーのドラッグ操作ロック
+    [originMarker, destinationMarker].forEach((m) => {
+      if (!m || !m.dragging) return;
+      if (locked) m.dragging.disable(); else m.dragging.enable();
+    });
+    waypointMarkers.forEach((m) => {
+      if (!m || !m.dragging) return;
+      if (locked) m.dragging.disable(); else m.dragging.enable();
+    });
+  }
+
+  let lastCompassToggle = 0;
+  function toggleCompass() {
+    const now = Date.now();
+    if (now - lastCompassToggle < 300) return;
+    lastCompassToggle = now;
+    const wasHeadingUp = nav.headingUp;
+    nav.headingUp = !nav.headingUp;
+    els.compassToggle.textContent = nav.headingUp
+      ? "🧭 方位: ヘディングアップ"
+      : "🧭 方位: ノースアップ";
+    if (wasHeadingUp && !nav.headingUp) {
+      // ノースアップ切り替え時はトランジションを無効化して瞬時に 0deg へ
+      navPane.style.transition = "none";
+      nav._displayRotation = 0;
+      navPane.style.rotate = "0deg";
+      requestAnimationFrame(() => {
+        navPane.style.transition = "";
+      });
+    }
+    applyNavRotation();
+  }
+
+  function drawResult(result) {
+    if (nav.active) stopNav();
+    nav.lastResult = result;
+    routeLayer.clearLayers();
+    restrictionLayer.clearLayers();
+    els.alertList.innerHTML = "";
+
+    const coordinates = result.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+    const mopedAlerts = result.alerts.filter((a) => a.alert_type === "MOPED_BAN_AVOIDED");
+    const hasAlert = result.alerts.length > 0;
+
+    const baseColor = mopedAlerts.length > 0 ? "#6366f1" : (hasAlert ? "#f97316" : "#059669");
+    const baseWeight = hasAlert ? 6 : 5;
+    const basePolyline = L.polyline(coordinates, {
+      color: baseColor,
+      weight: baseWeight,
+      opacity: 0.9,
+      noClip: true,
+    }).addTo(routeLayer);
+    nav.basePolyline = basePolyline;
+    nav.baseColor = baseColor;
+    nav.baseWeight = baseWeight;
+    nav.routeCoords = coordinates;
+
+    const restrictionIcon = L.divIcon({
+      className: "restriction-icon",
+      html: `<span class="icon-inner">⚠️</span>`,
+      iconSize: [26, 26],
+      iconAnchor: [13, 13],
+    });
+
+    const mopedBanIcon = L.divIcon({
+      className: "moped-badge",
+      html: `<span class="icon-inner">原</span>`,
+      iconSize: [34, 34],
+      iconAnchor: [17, 17],
+    });
+
+    result.alerts.forEach((alert) => {
+      const isMoped = alert.alert_type === "MOPED_BAN_AVOIDED";
+      L.marker([alert.lat, alert.lng], { icon: isMoped ? mopedBanIcon : restrictionIcon })
+        .addTo(restrictionLayer)
+        .bindPopup(
+          `<strong>${isMoped ? "⚠️ 原付進入禁止迂回" : alert.title}</strong>`
+          + `${alert.description}<br>（${alert.lat.toFixed(5)}, ${alert.lng.toFixed(5)}）`
+        )
+        .openPopup();
+
+      const card = document.createElement("div");
+      card.className = isMoped
+        ? "rounded-lg border-l-4 border-indigo-500 bg-white/95 shadow-lg px-4 py-3"
+        : "rounded-lg border-l-4 border-red-500 bg-white/95 shadow-lg px-4 py-3";
+      card.innerHTML = `
+        <p class="text-sm font-bold ${isMoped ? "text-indigo-700" : "text-red-700"}">`
+        + `${isMoped ? "⚠️ 原付進入禁止迂回" : `⚠️ ${alert.title}`}</p>
+        <p class="mt-1 text-xs leading-relaxed text-slate-600">${alert.description}</p>`;
+      els.alertList.appendChild(card);
+    });
+
+    els.distance.textContent = `${result.distance_km.toFixed(2)} km`;
+    els.duration.textContent = `${result.duration_min.toFixed(1)} 分`;
+    els.vehicleName.textContent = result.profile_applied.name;
+    els.speedBadge.textContent = speedBadgeText(result.profile_applied);
+    els.stopSummary.textContent = `地点数: ${2 + state.waypoints.length}`;
+    updateGuardStatus(result.alerts);
+
+    if (mopedAlerts.length > 0) {
+      els.statusChip.textContent = "二輪規制あり・迂回";
+      els.statusChip.className = "rounded-full px-2 py-0.5 text-xs font-bold bg-indigo-100 text-indigo-700";
+    } else if (hasAlert) {
+      els.statusChip.textContent = "高さ制限あり・迂回";
+      els.statusChip.className = "rounded-full px-2 py-0.5 text-xs font-bold bg-red-100 text-red-700";
+    } else {
+      els.statusChip.textContent = "通行可";
+      els.statusChip.className = "rounded-full px-2 py-0.5 text-xs font-bold bg-emerald-100 text-emerald-700";
+    }
+
+    map.fitBounds(basePolyline.getBounds(), { padding: [40, 40] });
+    syncNavButtons();
+  }
+
+  function routePayload() {
+    const profile = currentProfile();
+    return {
+      origin: { lat: state.origin.lat, lng: state.origin.lng, name: state.origin.name },
+      destination: { lat: state.destination.lat, lng: state.destination.lng, name: state.destination.name },
+      waypoints: state.waypoints.map((p) => ({ lat: p.lat, lng: p.lng, name: p.name })),
+      vehicle_profile: profile,
+    };
+  }
+
+  async function optimizeOrder() {
+    clearError();
+    if (searchInFlight) return;
+    searchInFlight = true;
+    if (state.waypoints.length < 2) {
+      showError("最適化には経由地が2件以上必要です");
+      return;
+    }
+    const beforeDistance = els.distance.textContent.trim();
+    const payload = routePayload();
+    const originalLabel = "⚡ 巡回順を最短に最適化";
+    els.optimizeButton.disabled = true;
+    els.optimizeButton.textContent = "最適化中...";
+    try {
+      const res = await fetch("/api/route/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `optimize API ${res.status}`);
+      }
+      const result = await res.json();
+      const ordered = result.ordered_waypoints || [];
+      if (ordered.length === state.waypoints.length) {
+        state.waypoints = ordered.map((p) => ({
+          lat: p.lat,
+          lng: p.lng,
+          name: p.name || coordLabel(p),
+        }));
+      }
+      renderWaypointRows();
+      rebuildWaypointMarkers();
+      drawResult(result);
+      showToast(
+        `⚡ 最適化完了: ルートを最短順に並び替えました`
+        + `（${beforeDistance} → ${result.distance_km.toFixed(2)} km）`
+      );
+    } catch (e) {
+      showError(`巡回順の最適化に失敗しました: ${e.message}`);
+    } finally {
+      searchInFlight = false;
+      els.optimizeButton.textContent = originalLabel;
+      syncOptimizeButton();
+    }
+  }
+
+  let searchInFlight = false;
+  async function runSearch() {
+    clearError();
+    if (searchInFlight) return;
+    searchInFlight = true;
+    const payload = routePayload();
+    if (!payload.vehicle_profile) {
+      showError("車両プリセットを選択してください");
+      return;
+    }
+
+    els.button.disabled = true;
+    els.button.textContent = "探索中...";
+    els.statusChip.textContent = "探索中";
+    els.statusChip.className = "rounded-full px-2 py-0.5 text-xs font-bold bg-slate-200 text-slate-600";
+
+    const requestId = ++searchSeq;
+    try {
+      const res = await fetch("/api/route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `route API ${res.status}`);
+      }
+      if (requestId === searchSeq) {
+        drawResult(await res.json());
+      }
+    } catch (e) {
+      if (requestId === searchSeq) {
+        showError(`ルート取得に失敗しました: ${e.message}`);
+        els.statusChip.textContent = "エラー";
+        els.statusChip.className = "rounded-full px-2 py-0.5 text-xs font-bold bg-red-100 text-red-700";
+      }
+    } finally {
+      searchInFlight = false;
+      if (requestId === searchSeq) {
+        els.button.disabled = false;
+        els.button.textContent = "ルート探索";
+      }
+    }
+  }
+
+  function scheduleSearch() {
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(runSearch, 400);
+  }
+
+  async function loadPresets() {
+    try {
+      const res = await fetch("/api/presets");
+      if (!res.ok) throw new Error(`presets API ${res.status}`);
+      presets = await res.json();
+      els.preset.innerHTML = Object.entries(presets)
+        .map(([key, p]) => `<option value="${key}">${p.name}</option>`)
+        .join("");
+      els.preset.value = presets[DEFAULT_PRESET] ? DEFAULT_PRESET : Object.keys(presets)[0];
+      applyPresetToSliders();
+    } catch (e) {
+      showError(`プリセット取得に失敗しました: ${e.message}`);
+    }
+  }
+
+  function applyQuick(od) {
+    setEndpoint("origin", od.origin);
+    setEndpoint("destination", od.destination);
+    state.waypoints = od.waypoints.map((p) => ({ ...p }));
+    renderWaypointRows();
+    rebuildWaypointMarkers();
+    hideSuggestions(els.originSuggestions);
+    hideSuggestions(els.destinationSuggestions);
+    runSearch();
+  }
+
+  async function geocodeAndSet(kind, query) {
+    clearError();
+    const input = kind === "origin" ? els.originInput : els.destinationInput;
+    input.value = query;
+    try {
+      const items = await fetchGeocode(query);
+      if (!items.length) {
+        showError(`「${query}」の候補が見つかりませんでした`);
+        return;
+      }
+      setEndpoint(kind, items[0]);
+      runSearch();
+    } catch (e) {
+      showError(`場所の検索に失敗しました: ${e.message}`);
+    }
+  }
+
+  els.preset.addEventListener("change", applyPresetToSliders);
+  els.button.addEventListener("click", runSearch);
+  els.originSearch.addEventListener("click", () => confirmGeocode("origin"));
+  els.destinationSearch.addEventListener("click", () => confirmGeocode("destination"));
+  els.originInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      confirmGeocode("origin");
+    }
+  });
+  els.originInput.addEventListener("input", () => scheduleSuggestions("origin"));
+  els.destinationInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      confirmGeocode("destination");
+    }
+  });
+  els.destinationInput.addEventListener("input", () => scheduleSuggestions("destination"));
+  els.addWaypoint.addEventListener("click", () => addWaypoint({
+    lat: 34.7076,
+    lng: 135.4926,
+    name: "中津駅",
+  }));
+  [els.heightSlider, els.widthSlider, els.weightSlider].forEach((slider) => {
+    slider.addEventListener("input", updateSizeLabels);
+    slider.addEventListener("change", scheduleSearch);
+  });
+
+  els.quickOsakaJuso.addEventListener("click", () => applyQuick(QUICK_OD.osakaToJuso));
+  els.quickOsakaShin.addEventListener("click", () => applyQuick(QUICK_OD.osakaToShin));
+  els.quickUtsuboMinami.addEventListener("click", () => applyQuick(QUICK_OD.utsuboToMinamisemba));
+  els.quickDelivery3.addEventListener("click", () => applyQuick(QUICK_OD.deliveryThree));
+  els.quickOptimizeTest.addEventListener("click", () => applyQuick(QUICK_OD.optimizeTest));
+  els.quickAddressTest.addEventListener("click", async () => {
+    await geocodeAndSet("origin", "大阪市北区中津1-4");
+    await geocodeAndSet("destination", "大阪市中央区南船場2丁目");
+  });
+  els.optimizeButton.addEventListener("click", optimizeOrder);
+  els.navToggle.addEventListener("click", () => {
+    if (nav.active) {
+      stopNav();
+      showToast("🛑 ナビを停止しました", true);
+    } else {
+      startNav("gps");
+    }
+  });
+  els.demoDrive.addEventListener("click", () => {
+    if (!nav.active) startNav("demo");
+  });
+  els.compassToggle.addEventListener("click", toggleCompass);
+  map.on("move zoom", () => {
+    if (nav.active || nav.headingUp) applyNavRotation();
+  });
+
+  function invalidateMapSize() {
+    try { map.invalidateSize({ pan: false }); } catch (e) { /* ignore */ }
+  }
+  function scheduleMapInvalidate() {
+    window.requestAnimationFrame(invalidateMapSize);
+    window.setTimeout(invalidateMapSize, 50);
+    window.setTimeout(() => {
+      invalidateMapSize();
+      if (nav.active) {
+        const pos = pointAtDistance(nav.currentCum);
+        if (pos) {
+          try {
+            const p0 = pos[0], p1 = pos[1];
+            if (isFinite(p0) && isFinite(p1)) map.setView([p0, p1], map.getZoom(), { animate: false, reset: false });
+          } catch (e) { /* ignore */ }
+        }
+      }
+    }, 300);
+  }
+  window.addEventListener("resize", scheduleMapInvalidate);
+  if (typeof ResizeObserver !== "undefined") {
+    try {
+      const mapResizeObserver = new ResizeObserver(() => scheduleMapInvalidate());
+      mapResizeObserver.observe(map.getContainer());
+    } catch (e) { /* ignore */ }
+  }
+  // 初期レイアウト確定後に一度 invalidate
+  window.setTimeout(invalidateMapSize, 0);
+  window.setTimeout(invalidateMapSize, 200);
+  els.receiptButton.addEventListener("click", () => els.receiptUpload.click());
+  if (els.geminiKeyToggle) {
+    els.geminiKeyToggle.addEventListener("click", () => {
+      const inp = els.geminiApiKey;
+      if (!inp) return;
+      inp.type = inp.type === "password" ? "text" : "password";
+      els.geminiKeyToggle.textContent = inp.type === "password" ? "表示" : "隠す";
+    });
+  }
+  if (els.geminiKeySave) {
+    els.geminiKeySave.addEventListener("click", () => {
+      const v = (els.geminiApiKey && els.geminiApiKey.value || "").trim();
+      try { localStorage.setItem("gemini_api_key", v); } catch (e) { /* ignore */ }
+      const badge = document.getElementById("gemini-key-badge");
+      if (badge) badge.classList.toggle("hidden", !v);
+      showToast(v ? "APIキーを保存しました" : "APIキーを削除しました", true);
+    });
+  }
+  els.receiptUpload.addEventListener("change", (e) => {
+    const files = e.target.files;
+    if (files && files.length) uploadReceipt(files);
+    e.target.value = "";
+  });
+
+  function pickImageFiles(dataTransfer) {
+    if (!dataTransfer) return [];
+    const collected = [];
+    if (dataTransfer.files) {
+      for (const file of dataTransfer.files) {
+        if (file.type && file.type.startsWith("image/")) collected.push(file);
+      }
+    }
+    if (!collected.length && dataTransfer.items) {
+      for (const item of dataTransfer.items) {
+        if (item.kind === "file" && item.type && item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) collected.push(file);
+        }
+      }
+    }
+    return collected;
+  }
+
+  ["dragover", "dragenter", "drop"].forEach((type) => {
+    document.addEventListener(type, (e) => e.preventDefault());
+  });
+  document.addEventListener("drop", (e) => {
+    const files = pickImageFiles(e.dataTransfer);
+    if (files.length) uploadReceipt(files);
+  });
+  document.addEventListener("paste", (e) => {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (const item of items) {
+      if (item.type && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          uploadReceipt(file);
+        }
+        break;
+      }
+    }
+  });
+
+  setEndpoint("origin", state.origin);
+  setEndpoint("destination", state.destination);
+  renderWaypointRows();
+  rebuildWaypointMarkers();
+  // Gemini API key load
+  (function () {
+    try {
+      const k = localStorage.getItem("gemini_api_key");
+      if (k && els.geminiApiKey) els.geminiApiKey.value = k;
+    } catch (e) { /* ignore */ }
+  })();
+  loadPresets();
+</script>
+</body>
+</html>
