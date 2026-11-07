@@ -1626,7 +1626,17 @@ const GUARD_THRESHOLD_M = 80;
     nav.baseColor = baseColor;
     nav.baseWeight = baseWeight;
     nav.routeCoords = coordinates;
-
+    // ナビ走行中にルートが再描画された場合（迂回等）、追従座標を再バインド
+    if (nav.active) {
+      buildNavRoute(result);
+      // 現在地から新ルート上の最近傍距離を再計算
+      if (nav.marker) {
+        const ll = nav.marker.getLatLng();
+        try { nav.currentCum = projectCum(ll.lat, ll.lng); } catch (e) { /* ignore */ }
+      }
+      try { updateNavRouteLayers(); } catch (e) { /* ignore */ }
+      try { updateBeaconLine(); } catch (e) { /* ignore */ }
+    }
     const restrictionIcon = L.divIcon({
       className: "restriction-icon",
       html: `<span class="icon-inner">⚠️</span>`,
