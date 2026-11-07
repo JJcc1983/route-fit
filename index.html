@@ -865,6 +865,7 @@ const GUARD_THRESHOLD_M = 80;
       if (detourMinGuardHeight !== null && effective <= detourMinGuardHeight) {
         guardDetourActive = false;
         detourMinGuardHeight = null;
+        console.log("[Route] 安全域復帰: 通常ルートへ切替");
         await runSearch();
       }
       return;
@@ -922,6 +923,7 @@ const GUARD_THRESHOLD_M = 80;
       guardDetourActive = true;
       detourMinGuardHeight = Math.min(...triggered.map((g) => g.max_height_m));
       drawResult(data);
+      console.log("[Route] 迂回路描画完了");
       showToast("ガード回避ルートを適用中", true);
       els.statusChip.textContent = "ガード回避ルート適用中";
       els.statusChip.className = "rounded-full px-2 py-0.5 text-xs font-bold bg-amber-100 text-amber-700";
@@ -1809,7 +1811,27 @@ const GUARD_THRESHOLD_M = 80;
         };
       }
       if (requestId === searchSeq) {
-        drawResult(data);
+        console.log("[Route] 通常ルート探索開始");
+        nav.lastResult = data;
+        const profile = currentProfile();
+        const effective = profile ? profile.height_m + profile.height_margin_m : 0;
+        const coords = data.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+        const triggered = GUARD_SPOTS.filter((g) => {
+          let minDist = Infinity;
+          for (const c of coords) {
+            const d = haversineMeters(g.lat, g.lng, c[0], c[1]);
+            if (d < minDist) minDist = d;
+          }
+          return minDist <= GUARD_THRESHOLD_M && effective > g.max_height_m;
+        });
+        if (triggered.length) {
+          console.log(`[Route] ガード危険検知: 迂回路探索開始 (制限高: ${Math.min(...triggered.map((g) => g.max_height_m))} m / 車高: ${effective.toFixed(2)} m)`);
+          await applyGuardDetour();
+        } else {
+          guardDetourActive = false;
+          detourMinGuardHeight = null;
+          drawResult(data);
+        }
       }
     } catch (e) {
       if (requestId === searchSeq) {
